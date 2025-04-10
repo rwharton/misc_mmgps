@@ -4,18 +4,46 @@ from RMtools_1D.do_RMsynth_1D import run_rmsynth
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
+def avg_chan(dat, edat, nchan=4):
+    """
+    average data by nchan chans
+    """
+    Np = len(dat) // nchan
+    dd = np.reshape( dat[: Np * nchan], (-1, nchan) )
+    dd_avg = np.mean(dd, axis=1)
+    
+    edd = np.reshape( edat[: Np * nchan], (-1, nchan) )
+    edd_avg = np.sqrt(np.sum( edd**2, axis=1 )) / nchan / 10
+    
+    return dd_avg, edd_avg
 
-def rm_synth_beam(bdat, freqs):
+
+def avg_chan_darr(freqs, darr, nchan=4):
     """
-    Inputs are our beam data and frequencies, 
-    which we get in the appropriate format for 
-    `run_rmsynth` and then run... `run_rmsynth`
+    Run channel averaging on darr
+    """    
+    Np = len(freqs) // nchan
+    favg = np.mean( np.reshape(freqs, (-1, nchan)), axis=1 )
+
+    darr_avg = np.zeros( (len(favg), darr.shape[1]), dtype='float')
+    for ii in range(4):
+        dd_ii, edd_ii = avg_chan(darr[:, 2 * ii], darr[:, 2 *ii+1], nchan=nchan)
+        darr_avg[:, 2 * ii] = dd_ii
+        darr_avg[:, 2 * ii+1] = edd_ii
+
+    return favg, darr_avg  
+
+
+def get_bdat(bfile):
     """
+    Load in bdat file and return IQUV
+    """
+    bdat = np.load(bfile)
+
     I = np.mean(bdat[0, :, :], axis=0)
     Q = np.mean(bdat[1, :, :], axis=0)
     U = np.mean(bdat[2, :, :], axis=0)
-
-    I = np.ones(shape=I.shape)
+    V = np.mean(bdat[3, :, :], axis=0)
 
     Nt = bdat.shape[1]
     Nf = bdat.shape[2]
@@ -24,20 +52,57 @@ def rm_synth_beam(bdat, freqs):
     dI = np.std(bdat[0, :, :], axis=0) / np.sqrt(Nt)
     dQ = np.std(bdat[1, :, :], axis=0) / np.sqrt(Nt)
     dU = np.std(bdat[2, :, :], axis=0) / np.sqrt(Nt)
+    dV = np.std(bdat[3, :, :], axis=0) / np.sqrt(Nt)
 
-    #dI = dQ = dU = np.ones(len(I)) * 14e-6 * np.sqrt(Nf)
+    dlist = [ I, dI, Q, dQ, U, dU, V, dV ]
+
+    darr = np.vstack( dlist ).T
+
+    return darr
+
+
+def get_idat(ifile):
+    """
+    Get imaging data spectrum from Aritra's dat file
+    """
+    idat = np.loadtxt(ifile, dtype='float')
+
+    if len(idat) == 0:
+        freqs = []
+        darr = []
+
+    else:
+        freqs = idat[:, 0] * 1e9
+        darr  = idat[:, 1:9]
+
+    return [freqs, darr]
+
+
+def rm_synth_beam(darr, freqs, outbase=None, noStokesI=False):
+    """
+    Inputs are our beam data and frequencies, 
+    which we get in the appropriate format for 
+    `run_rmsynth` and then run... `run_rmsynth`
+    """
+    I, dI, Q, dQ, U, dU, V, dV = darr.T
 
     dlist = [ freqs, I, Q, U, dI, dQ, dU ]
 
-    md, ad = run_rmsynth(dlist, fitRMSF=True, showPlots=False, saveFigures='test')
+    if outbase is None:
+        saveFigures=False
+    else:
+        saveFigures=True
+
+    md, ad = run_rmsynth(dlist, fitRMSF=True, showPlots=False, prefixOut=outbase, 
+                         saveFigures=saveFigures, noStokesI=noStokesI)
 
     return md, ad
 
 
 def write_output(outfile, phi_pks, dphi_pks, PI_pks, dPI_pks):
     with open(outfile, 'w') as fout:
-        hdr = f"# {'Beam' : <10} {'RM':^12} {'RM_err':^12} {'PI':^12} {'PI_err':^12}"
-        hdr2 = f"# {'' : <10} {'(rad/m^2)':^12} {'(rad/m^2)':^12} {'(mJy)':^12} {'(mJy)':^12}"
+        hdr = f"# {'Beam' : <10} {'RM':^12} {'RM_err':^12} {'PI':^14} {'PI_err':^14}"
+        hdr2 = f"# {'' : <10} {'(rad/m^2)':^12} {'(rad/m^2)':^12} {'(mJy)':^14} {'(mJy)':^14}"
         fout.write(hdr + "\n" + hdr2 + "\n")
 
         for ii in range(len(phi_pks)):
@@ -45,21 +110,32 @@ def write_output(outfile, phi_pks, dphi_pks, PI_pks, dPI_pks):
             ostr = ""
             ostr += f"{src_str: <10} " 
             ostr += f"{phi_pks[ii] : >12.2f} {dphi_pks[ii] : >12.2f} "
-            ostr += f"{PI_pks[ii]*1e3 : >12.3f} {dPI_pks[ii]*1e3 : >12.3f}"
+            ostr += f"{PI_pks[ii]*1e3 : >14.5f} {dPI_pks[ii]*1e3 : >14.5f}"
 
             fout.write(ostr + "\n")
 
     return 
 
 
-def rm_synth_many_beams(blist, freq_file, outfile=None, use_freqs=[]):
+def get_base(infile, dat_type='beam'):
+    bfname = infile.split('/')[-1]
+    if dat_type == 'beam':
+        bbase = bfname.split('.npy')[0]
+    else:
+        bbase = bfname.split('.dat')[0]
+    return bbase
+
+
+def rm_synth_many_beams(blist, freq_file, outfile=None, 
+                        noStokesI=False, use_freqs=[], 
+                        chan_avg=1, dat_type='beam'):
     """
     blist = list of beam dat files
     freq_file = frequency channel file (in Hz)
     use_freqs = option list of freq indices to use
+    dat_type = 'image' or 'beam'
     """
     plt.ioff()
-    freqs = np.load(freq_file)
 
     phi_pks  = []
     dphi_pks = []
@@ -68,13 +144,34 @@ def rm_synth_many_beams(blist, freq_file, outfile=None, use_freqs=[]):
     dPI_pks = []
     
     for bbfile in blist:
-        bdat = np.load(bbfile)
+        if dat_type == 'beam':
+            freqs = np.load(freq_file)
+            darr = get_bdat(bbfile)
+        else:
+            freqs, darr = get_idat(bbfile)
+            print(len(freqs))
+            if len(freqs) == 0:
+                print("here")
+                phi_pks.append( np.nan  )
+                dphi_pks.append( np.nan )
+                PI_pks.append( np.nan )
+                dPI_pks.append( np.nan )
+                continue
+
+        if chan_avg > 1:
+            freqs, darr = avg_chan_darr(freqs, darr, nchan=chan_avg)
+
         if len(use_freqs):
-            bdat = bdat[:, :, use_freqs]
+            bdat = bdat[use_freqs, :]
             ff = freqs[use_freqs]
+        else:
+            ff = freqs[:]
+
+        # get basename
+        bbase = get_base(bbfile, dat_type=dat_type)
 
         # run rm synth
-        md, ad = rm_synth_beam(bdat, ff)
+        md, ad = rm_synth_beam(darr, ff, bbase, noStokesI=noStokesI)
 
         phi_pks.append( md['phiPeakPIfit_rm2'] )
         dphi_pks.append( md['dPhiPeakPIfit_rm2'] )
@@ -196,8 +293,8 @@ def write_pos_rm_cat(rm_file, bloc_file, outfile):
 
 
 # S1102
-#cc0 = (206.6635833333, -63.06052777778) 
+cc0 = (206.6635833333, -63.06052777778) 
 
 #L3044
-cc0 = (237.809250, -56.031166)
+#cc0 = (237.809250, -56.031166)
 
