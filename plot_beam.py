@@ -7,8 +7,23 @@ matplotlib.rcParams.update({
     "font.family": "Helvetica"
 })
 
+def get_yrange(dat, frac=0.95, pfac=1.2):
+    """
+    Try to make ylim sensible
+    """
+    sdat = np.sort(dat)
+    N = len(sdat)
 
-def stokes_plot(dat_file, freq_file, outfile=None, title=None):
+    slo = sdat[int(N * (1-frac))]
+    shi = sdat[int(N * frac)]
+
+    ylo = slo - pfac * (shi - slo)
+    yhi = shi + pfac * (shi - slo)
+
+    return (ylo, yhi)
+
+
+def stokes_plot(dat_file, freq_file, outfile=None, title=None, use_freqs=None):
     """
     Plot IQUV
 
@@ -17,6 +32,10 @@ def stokes_plot(dat_file, freq_file, outfile=None, title=None):
     """
     dat = np.load(dat_file)
     freqs = np.load(freq_file) / 1e9
+
+    if use_freqs is not None:
+        dat = dat[:, :, use_freqs]
+        freqs = freqs[use_freqs]
     
     dat *= 1000  # mJy
 
@@ -41,6 +60,21 @@ def stokes_plot(dat_file, freq_file, outfile=None, title=None):
     axQ.plot(freqs, Q, c=colors[1])
     axU.plot(freqs, U, c=colors[2])
     axV.plot(freqs, V, c=colors[3])
+
+    frac = 0.95
+    pfac = 1.2
+    I_ylim = get_yrange(I, frac=frac, pfac=pfac)
+    axI.set_ylim(I_ylim)
+    
+    Q_ylim = get_yrange(Q, frac=frac, pfac=pfac)
+    axQ.set_ylim(Q_ylim)
+    
+    U_ylim = get_yrange(U, frac=frac, pfac=pfac)
+    axU.set_ylim(U_ylim)
+    
+    V_ylim = get_yrange(V, frac=frac, pfac=pfac)
+    axV.set_ylim(V_ylim)
+    
 
     axI.set_ylabel("$S_I \\, \\rm{ (mJy)}$", fontsize=14)
     axQ.set_ylabel("$S_Q \\, \\rm{ (mJy)}$", fontsize=14)
@@ -159,12 +193,12 @@ def time_stokes_plot(dat_file, dt, outfile=None, title=None):
 
 
 
-def many_stokes_plots(bnums, freq_file, dt):
+def many_stokes_plots(bnums, freq_file, dt, suffix='full'):
     """
     Make many beam numbers
     """ 
     for bnum in bnums:
-        dat_file = f"beam{bnum:03d}_full.npy"
+        dat_file = f"beam{bnum:03d}_{suffix}.npy"
         ospec = f"IQUV_spec_beam{bnum:03d}.png"
         title = f"beam{bnum:03d}" 
         stokes_plot(dat_file, freq_file, outfile=ospec, title=title)  

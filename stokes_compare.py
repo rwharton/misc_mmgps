@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 def avg_chan(dat, edat, nchan=4):
     """
@@ -121,7 +122,7 @@ def compare_plot(ifile, bfile, bfreqs, title=None, outfile=None, bchan_avg=1):
         return
 
     # get to mJy
-    bdat *= 1e3
+    bdat *= 1e3/2
     idat *= 1e3
 
     fig = plt.figure(figsize=(6, 8))
@@ -215,9 +216,12 @@ def many_compare_plots(idir, bdir, freq_file, bnums, bchan_avg=1):
 
     for bb in bnums:
         bstr = f"beam{bb:03d}"
-        ifile = f"{idir}/beam{bb:04d}_qu_spectra.dat"
+        ifile = f"{idir}/beam{bb:03d}_qu_spectra.dat"
         bfile = f"{bdir}/{bstr}_full.npy"
         ofile = f"{bstr}_compare.png"
+
+        if not os.path.exists(ifile):
+            continue
   
         compare_plot(ifile, bfile, bfreqs, title=bstr, outfile=ofile, bchan_avg=bchan_avg)     
 

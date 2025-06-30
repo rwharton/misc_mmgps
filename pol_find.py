@@ -427,7 +427,7 @@ def stokes_frac_fov(fits_table, Imin=0, pol='Q',
 
 
 # L1825 pars
-"""
+#"""
 ra0 = -174.317916666667
 dec0 = -64.2009722222222
 size = 3.33
@@ -435,7 +435,7 @@ fc = 1.278984375
 bw = 0.758404296
 freqs = fc + np.array([-0.5, 0.5]) * bw
 rlist = 1.0 * (1.4/freqs) / 2.
-"""
+#"""
 
 # S0748  / S0759
 """

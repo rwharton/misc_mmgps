@@ -4,6 +4,18 @@ from RMtools_1D.do_RMsynth_1D import run_rmsynth
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
+
+def running_median(dd, nwin=30):
+    """
+    Calculate running median with window size nwin bins 
+    """
+    mdd = np.copy(dd)
+    for ii in range( 0 + nwin//2, len(dd) - nwin//2 ):
+        mdd[ii] = np.median( dd[ii - nwin//2 : ii + nwin//2 ] )
+
+    return mdd
+
+
 def avg_chan(dat, edat, nchan=4):
     """
     average data by nchan chans
@@ -13,7 +25,7 @@ def avg_chan(dat, edat, nchan=4):
     dd_avg = np.mean(dd, axis=1)
     
     edd = np.reshape( edat[: Np * nchan], (-1, nchan) )
-    edd_avg = np.sqrt(np.sum( edd**2, axis=1 )) / nchan / 10
+    edd_avg = np.sqrt(np.sum( edd**2, axis=1 )) / nchan #/ 10
     
     return dd_avg, edd_avg
 
@@ -61,6 +73,26 @@ def get_bdat(bfile):
     return darr
 
 
+def swap_QU(darr, xx):
+    """
+    Swap Q and U for channels xx
+    """
+    Qxx = darr[xx, 2]
+    eQxx = darr[xx, 3]
+    
+    Uxx = darr[xx, 4]
+    eUxx = darr[xx, 5]
+
+    darr2 = np.copy(darr)
+    
+    darr2[xx, 2] = -1 * Uxx
+    darr2[xx, 3] = eUxx
+    darr2[xx, 4] = -1 * Qxx
+    darr2[xx, 5] = eQxx
+
+    return darr2
+
+
 def get_idat(ifile):
     """
     Get imaging data spectrum from Aritra's dat file
@@ -78,7 +110,8 @@ def get_idat(ifile):
     return [freqs, darr]
 
 
-def rm_synth_beam(darr, freqs, outbase=None, noStokesI=False):
+def rm_synth_beam(darr, freqs, outbase=None, noStokesI=False, 
+                  phiMax_radm2=None):
     """
     Inputs are our beam data and frequencies, 
     which we get in the appropriate format for 
@@ -94,7 +127,8 @@ def rm_synth_beam(darr, freqs, outbase=None, noStokesI=False):
         saveFigures=True
 
     md, ad = run_rmsynth(dlist, fitRMSF=True, showPlots=False, prefixOut=outbase, 
-                         saveFigures=saveFigures, noStokesI=noStokesI)
+                         saveFigures=saveFigures, noStokesI=noStokesI, 
+                         phiMax_radm2=phiMax_radm2)
 
     return md, ad
 
@@ -127,8 +161,8 @@ def get_base(infile, dat_type='beam'):
 
 
 def rm_synth_many_beams(blist, freq_file, outfile=None, 
-                        noStokesI=False, use_freqs=[], 
-                        chan_avg=1, dat_type='beam'):
+                        noStokesI=False, phiMax_radm2=None, 
+                        use_freqs=[], chan_avg=1, dat_type='beam'):
     """
     blist = list of beam dat files
     freq_file = frequency channel file (in Hz)
@@ -162,7 +196,7 @@ def rm_synth_many_beams(blist, freq_file, outfile=None,
             freqs, darr = avg_chan_darr(freqs, darr, nchan=chan_avg)
 
         if len(use_freqs):
-            bdat = bdat[use_freqs, :]
+            darr = darr[use_freqs, :]
             ff = freqs[use_freqs]
         else:
             ff = freqs[:]
@@ -171,7 +205,8 @@ def rm_synth_many_beams(blist, freq_file, outfile=None,
         bbase = get_base(bbfile, dat_type=dat_type)
 
         # run rm synth
-        md, ad = rm_synth_beam(darr, ff, bbase, noStokesI=noStokesI)
+        md, ad = rm_synth_beam(darr, ff, bbase, noStokesI=noStokesI,  
+                               phiMax_radm2=phiMax_radm2)
 
         phi_pks.append( md['phiPeakPIfit_rm2'] )
         dphi_pks.append( md['dPhiPeakPIfit_rm2'] )
@@ -292,9 +327,51 @@ def write_pos_rm_cat(rm_file, bloc_file, outfile):
     return
 
 
+def write_cat_output2(outfile, ras, decs, phi_pks, dphi_pks, PI_pks, dPI_pks, resolved):
+    with open(outfile, 'w') as fout:
+        hdr = f"# {'Beam' : <10} {'ra':^12} {'dec':^12} {'RM':^12} {'RM_err':^12} {'PI':^12} {'PI_err':^12} {'Resolved?':^10}"
+        hdr2 = f"# {'' : <10} {'(deg)':^12} {'(deg)':^12} {'(rad/m^2)':^12} {'(rad/m^2)':^12} {'(mJy)':^12} {'(mJy)':^12} {'':^10}"
+        fout.write(hdr + "\n" + hdr2 + "\n")
+
+        for ii in range(len(phi_pks)):
+            src_str = f"beam{ii:03d}"
+            ostr = ""
+            ostr += f"{src_str: <10} " 
+            ostr += f"{ras[ii] : >12.6f} {decs[ii] : >12.6f} "
+            ostr += f"{phi_pks[ii] : >12.2f} {dphi_pks[ii] : >12.2f} "
+            ostr += f"{PI_pks[ii] : >12.3f} {dPI_pks[ii] : >12.3f} "
+            ostr += f"{resolved[ii] : ^10d}"
+
+            fout.write(ostr + "\n")
+
+    return 
+
+
+def write_pos_rm_cat2(rm_file, bloc_file, outfile, res_file):
+    """
+    Make a catalog with ra dec rm pi
+    """
+    # Read rm file
+    dat = np.loadtxt(rm_file, usecols=(1,2,3,4))
+    rms, drms, pis, dpis = dat.T 
+
+    # read in coordinates in ra dec deg
+    ra, dec = read_and_convert_locs(bloc_file)
+
+    # read in resolved flag
+    res = np.load(res_file)
+
+    write_cat_output2(outfile, ra, dec, rms, drms, pis, dpis, res)
+
+    return
+
+
 # S1102
-cc0 = (206.6635833333, -63.06052777778) 
+#cc0 = (206.6635833333, -63.06052777778) 
 
 #L3044
 #cc0 = (237.809250, -56.031166)
+
+#S1224
+cc0 = (212.872125, -62.034)
 

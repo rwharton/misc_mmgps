@@ -5,7 +5,12 @@ from astropy.wcs import WCS
 from astropy.io import fits
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+import matplotlib
 
+matplotlib.rcParams.update({
+    "text.usetex": True,
+    "font.family": "Helvetica"
+})
 
 def one_beam_to_coord(ra_str, dec_str):
     """
@@ -104,7 +109,7 @@ def make_one_cutout(cdat, dx_deg, dy_deg, vmin=None, vmax=None,
     ax.set_ylabel("Offset (arcsec)", fontsize=14)
     
     if title is not None:
-        ax.set_title(title, fontsize=16)
+        ax.set_title(title, fontsize=14)
 
     cbar = plt.colorbar(im)
 
@@ -153,6 +158,35 @@ def find_beams_in_field( idx_arr, idx0, size, rpix):
     return idx_offset, xx
 
 
+def get_offsets(cc1, cc0, unit='arcmin'):
+    """
+    calculate the offsets between two coordinates
+    """
+    cc1_ra  = SkyCoord(cc1.ra, cc0.dec, frame='fk5')
+    cc1_dec = SkyCoord(cc0.ra, cc1.dec, frame='fk5')
+
+    ra_off  = cc1_ra.separation(cc0).arcmin
+    dec_off = cc1_dec.separation(cc0).arcmin
+
+    if unit == 'deg':
+        fac = 60.
+    elif unit == 'arcsec':
+        fac = 1/60.
+    else:
+        fac = 1.
+
+    ra_off /= fac
+    dec_off /= fac
+
+    if cc1.ra < cc0.ra:
+        ra_off *= -1
+    if cc1.dec < cc0.dec:
+        dec_off *= -1
+
+    return (ra_off, dec_off)
+    
+
+
 def make_cutouts(cc_list, fits_file, size_arcsec=120, 
                  radius_arcsec=20, vmin=None, vmax=None):
     """
@@ -170,6 +204,10 @@ def make_cutouts(cc_list, fits_file, size_arcsec=120,
     dat = hdu.data[0, 0, :, :]
     subwcs = wcs[0, 0, :, :]
 
+    # Get center coord
+    r0, c0 = subwcs.array_shape
+    cc0 = subwcs.array_index_to_world(r0//2 + 1, c0//2 + 1 )
+
     idx_arr = get_beam_centers(cc_list, subwcs)
 
     size = int( size_arcsec / (np.abs(cdelt1) * 3600) )
@@ -179,14 +217,21 @@ def make_cutouts(cc_list, fits_file, size_arcsec=120,
         print(ii)
         bname = f"beam{ii:03d}"
         outname = f"{bname}_cutout.png"
+        ra_off, dec_off = get_offsets(cc, cc0, unit='arcmin')
         cdat, idx0 = get_cutout(cc, dat, subwcs, size)
+        if cdat.size == 0:
+            continue
         idx_offset, xx = find_beams_in_field( idx_arr, idx0, 
                                               size, rpix)
+
+        title = bname + ": "
+        title += "$(\\Delta \\alpha, \Delta \\delta) =$"
+        title += f"({ra_off:+.1f}\', {dec_off:+.1f}\')"
         make_one_cutout(cdat * 1e3, cdelt1, cdelt2, 
                         idx_off=idx_offset, xx=xx, 
                         radius=radius_arcsec, 
                         vmin=vmin, vmax=vmax,
-                        title=bname, outfile=outname)
+                        title=title, outfile=outname)
 
     hdulist.close()
     return
