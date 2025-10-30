@@ -10,14 +10,14 @@ import sys
 import shutil
 
 
-def get_pol_files(indir, basename, pols="IQUV"):
+def get_pol_files(indir, basename, pols="IQUV", suffix=None):
     """
     Get list of paths to the polarization FITS files.
 
     Will glob on indir/basename*[pols].fits 
 
     Assumes polarization is indicated by the last letter 
-    before the fits extension, so: "[whatever][IQUV].fits"
+    before the fits extension, so: "[whatever][IQUV][suffix].fits"
 
     Returns list of file paths for each pol letter in "pols", 
     in that order.  So "IV" gives [Ifile, Vfile] and "VUQI" 
@@ -29,7 +29,10 @@ def get_pol_files(indir, basename, pols="IQUV"):
     pol_files = []  
 
     for pp in pol_list:
-        mstr = f"{indir}/{basename}*{pp}.fits"
+        if suffix is not None:
+            mstr = f"{indir}/{basename}*{pp}{suffix}.fits"
+        else:
+            mstr = f"{indir}/{basename}*{pp}.fits"
         mpaths = glob(mstr)
         if len(mpaths) == 0:
             print(f"No files found matching {mstr}")
@@ -57,14 +60,14 @@ def check_and_copy(src, dst):
     return 
 
 
-def setup_workdir(workdir, indir, inbase, outbase=None):
+def setup_workdir(workdir, indir, inbase, suffix=None, outbase=None):
     """
     Make directory where we will do our processing, 
     """
     # Get files and polarizations
     # Need all pols in IQUV order for combined fits file
     # to make sense
-    pol_files, pol_list = get_pol_files(indir, inbase, pols="IQUV")
+    pol_files, pol_list = get_pol_files(indir, inbase, pols="IQUV", suffix=suffix)
 
     # Make work directory if required 
     if not os.path.exists(workdir):
@@ -99,16 +102,16 @@ def setup_workdir(workdir, indir, inbase, outbase=None):
     return opath
 
 
-def srcfind_pol(fitsfile, cat_fmt='fits', regfile=True):
+def srcfind_pol(fitsfile, cat_fmt='fits', cat_type='srl', regfile=True):
     """
     Run the pybdsf source finding on polarization
     images
     """
     img = bdsf.process_image(fitsfile, polarisation_do=True, 
                              pi_fit=False, rms_box=(200, 50))
-    img.write_catalog(format=cat_fmt, catalog_type='srl')
+    img.write_catalog(format=cat_fmt, catalog_type=cat_type)
     if regfile:
-        img.write_catalog(format='ds9', catalog_type='srl')
+        img.write_catalog(format='ds9', catalog_type=cat_type)
 
     img.export_image(img_type='rms')
    

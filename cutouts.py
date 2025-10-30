@@ -184,11 +184,30 @@ def get_offsets(cc1, cc0, unit='arcmin'):
         dec_off *= -1
 
     return (ra_off, dec_off)
+
+
+
+def get_cut_stats(cdat, frac=0.9):
+    """
+    find max at central npix x npix of cdat
+    """
+    cvals = np.sort(cdat.ravel())
+    N = len(cvals)
+    xlo = int( N * 0.5 * (1-frac) )
+    xhi = int( N * 0.5 * (1+frac) )
+    cmids = cvals[ xlo : xhi ]
+
+    sig = np.std(cmids)
+    vlo = cmids[0]
+    vhi = cmids[-1]
+
+    return sig, vlo, vhi
     
 
 
 def make_cutouts(cc_list, fits_file, size_arcsec=120, 
-                 radius_arcsec=20, vmin=None, vmax=None):
+                 radius_arcsec=20, frac=0.9, 
+                 vmin=None, vmax=None):
     """
     Make cutouts from coord list cc_list
     """
@@ -227,6 +246,7 @@ def make_cutouts(cc_list, fits_file, size_arcsec=120,
         title = bname + ": "
         title += "$(\\Delta \\alpha, \Delta \\delta) =$"
         title += f"({ra_off:+.1f}\', {dec_off:+.1f}\')"
+
         make_one_cutout(cdat * 1e3, cdelt1, cdelt2, 
                         idx_off=idx_offset, xx=xx, 
                         radius=radius_arcsec, 

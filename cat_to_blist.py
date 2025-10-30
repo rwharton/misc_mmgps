@@ -220,6 +220,20 @@ def get_flux_sorted_rows(fits_file, smin=0, point=True):
         idx = idx[zz]
 
     return idx
+
+
+def loc_filter(fits_file, cc0, sep_arcmin):
+    """
+    return rows of sources that fall within sep_arcmin 
+    arcminutes from the sky coordinate cc0
+    """
+    tab = Table.read(fits_file)
+    ccs = SkyCoord(tab['RA'], tab['DEC'])
+   
+    xx = np.where( cc0.separation(ccs).arcmin < sep_arcmin )[0]
+
+    return xx
+    
      
 
 def flux_sorted_blist(fits_file, smin=0, point=True, regfile=None):
@@ -347,6 +361,47 @@ def blist_to_reg(blist, reg_file, radius=20,
     return
 
 
+def sw_to_reg(swfile, reg_file, radius=20, 
+              color='white', shape='circle'):
+    slist = ["circle", "box", "point"]
+    if shape not in slist:
+        print("Shape must be one of: " + ",".join(slist))
+        return
+
+    hdr = "" +\
+          "# Region file format: DS9 version 4.0\n" +\
+          f"global color={color} font=\"helvetica 10 normal\" select=1 "+\
+          "highlite=1 edit=1 move=1 delete=1 include=1 fixed=0 source\n"+\
+          "fk5\n"
+
+    ras = []
+    decs = []
+    names = []
+
+    with open(swfile, 'r') as fin:
+        for line in fin:
+            line = line.strip("\",\n")
+            cols = line.split(',')
+            print(line)
+            if len(cols) != 4:
+                continue
+            name, _, ra_str, dec_str = cols
+            ras.append(ra_str)
+            decs.append(dec_str)
+            names.append(name)
+
+    with open(reg_file, 'w') as fout:
+        fout.write(hdr)
+        for ii in range(len(ras)):
+            ra_str = ras[ii]
+            dec_str = decs[ii]
+            name = names[ii]
+            out = get_reg_str(ra_str, dec_str, radius, shape, 
+                              cc_str=True, label=name)
+            fout.write(out)
+    return
+
+
 def get_spec(tab, idx, nchan=8):
     """
     go to row idx of table tab and extract 
@@ -356,13 +411,16 @@ def get_spec(tab, idx, nchan=8):
     """
     freqs = []
     fluxes = []
+    e_fluxes = []
     
     for ii in range(nchan):
         freq_key = f"Freq_ch{ii:d}"
         flux_key = f"Aperture_flux_ch{ii:d}"
+        e_flux_key = f"Aperture_rms_ch{ii:d}"
         
         freq = tab[idx].get(freq_key, -1)
         flux = tab[idx].get(flux_key, -1)
+        e_flux = tab[idx].get(e_flux_key, -1)
 
         print(freq, flux)
 
@@ -374,16 +432,76 @@ def get_spec(tab, idx, nchan=8):
 
         freqs.append(freq)
         fluxes.append(flux)
+        e_fluxes.append(e_flux)
 
     freqs = np.array(freqs)
     fluxes = np.array(fluxes)
+    e_fluxes = np.array(e_fluxes)
 
     alpha = tab[idx]['Alpha']
     e_alpha = tab[idx]['E_Alpha']
     print(f"spindex = {alpha:.2f} ({e_alpha:.2f})") 
 
-    return freqs, fluxes
+    return freqs, fluxes, e_fluxes
+
+
+def get_one_per(tab, kind='source'):
+    """
+    Sort by flux density (highest to lowest), then 
+    go through and just take the brightest gaus per 
+    source (or island)
+    """
+    if kind == 'source':
+        key = 'Source_id'
+    else:
+        key = 'Isl_id'
+
+    xx = np.argsort(tab['Total_flux'])[::-1]
+
+    id_seen = []
+    xx_keep = []
+
+    for xxi in xx:
+        sid = tab[key][xxi] 
+        if sid in id_seen:
+            continue
         
+        xx_keep.append(xxi)
+        id_seen.append(sid)
+
+    return xx_keep
         
+ 
+def table_to_sw(fits_table, outfile, name="SRC", use_rows=None):
+    """
+    Read in a fits_table and make a text file in a format 
+    useful for the skyweaver config file
     
+    Source name is:
+
+        [name]_PS_NUM
     
+    Optionally only use rows given in use_rows 
+    (def: None = use all)
+    """
+    full_tab = Table.read(fits_table)
+    if use_rows is not None:
+        tab = full_tab[use_rows]
+    else:
+        tab = full_tab
+
+    ras = tab["RA"]
+    decs = tab["DEC"]
+
+    with open(outfile, 'w') as fout:
+        for ii in range(len(tab)):
+            ra = ras[ii]
+            dec = decs[ii]
+            cc = SkyCoord(ra, dec, unit=(u.deg, u.deg))
+            ra_str, dec_str = cc.to_string('hmsdms', sep=':', precision=4).split()
+            ostr = f"\"{name}_PS_{ii},radec,{ra_str},{dec_str}\""
+            if ii < len(tab)-1:
+                ostr += ','
+            fout.write(ostr + "\n")
+    return
+

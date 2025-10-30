@@ -1,13 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt 
 from astropy.coordinates import SkyCoord
-from astropy.table import Table
 import astropy.units as u
 import subprocess as sub
 import os
 import glob
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 import json
+from astropy.table import Table
 
 def running_median(dd, nwin=30):
     """
@@ -60,9 +60,6 @@ def get_bdat(bfile):
     Q = np.mean(bdat[1, :, :], axis=0)
     U = np.mean(bdat[2, :, :], axis=0)
     V = np.mean(bdat[3, :, :], axis=0)
-    
-    #Q -= np.mean(Q)
-    #U -= np.mean(U)
 
     Nt = bdat.shape[1]
     Nf = bdat.shape[2]
@@ -97,7 +94,7 @@ def get_idat(ifile):
     return [freqs, darr]
 
 
-def darr_to_txt(outfile, darr, freqs):
+def darr_to_txt(outfile, darr, freqs, model=None):
     """
     Write spectra to text file format that 
     can be passed to RMSynth1D
@@ -117,6 +114,10 @@ def darr_to_txt(outfile, darr, freqs):
         for ii, freq in enumerate(freqs):
             xx = [0, 2, 4, 1, 3, 5]
             I, Q, U, dI, dQ, dU = darr[ii, xx]
+
+            if model is not None:
+                S0, alpha, freq0 = model
+                I = S0 * (freq/freq0)**alpha 
             
             ostr = f"{freq:12.1f} " +\
                    f"{I:10.6f} {Q:10.6f} {U:10.6f} " +\
@@ -127,7 +128,7 @@ def darr_to_txt(outfile, darr, freqs):
     return
 
 
-def run_rmsynth1d(infile, phimax=None):
+def run_rmsynth1d(infile, phimax=None, use_I=False):
     """
     Run rmsynth1d on the input text file infile 
     (assumed to be in proper format).  Optionally 
@@ -139,7 +140,10 @@ def run_rmsynth1d(infile, phimax=None):
     if phimax is not None:
         phi_str = f"-l {phimax:.2f}"
     
-    cmd = f"rmsynth1d -i -S {phi_str} {infile}"
+    if use_I:
+        cmd = f"rmsynth1d -S {phi_str} {infile}"
+    else:
+        cmd = f"rmsynth1d -i -S {phi_str} {infile}"
     print(cmd)
     
     try:
@@ -176,15 +180,39 @@ def run_rmclean1d(infile, niter, threshold):
     return ret.returncode 
 
 
+def get_model(table, row):
+    """
+    Get model from fits table 
+
+    return (S0, alpha)
+    """
+    S0 = table['Total_flux'][row]
+    alpha = table['Alpha'][row]
+    return S0, alpha
+
+
 def rm_clean_many(npy_files, freq_file, mask_file=None, outdir='.', 
+                  cat_fits=None, row_file=None, 
                   niter=200, threshold=-2, phimax=None):
     """
     Given a list of npy data files, run rm clean on 
     all and output to individual directories
+
     """
+    use_model = False
+
+    if cat_fits is not None:
+        tab =  Table.read(cat_fits)
+        if row_file is not None:
+            rr = np.load(row_file)
+            use_model = True
+
     for npy_file in npy_files:
         fname = npy_file.split('/')[-1]
         basenm = fname.split('.npy')[0]
+
+        # get bnum
+        bnum = int(basenm.split('_')[0].split('beam')[-1])
         
         # directory where clean data will go
         bdir = f"{outdir}/{basenm}"
@@ -201,10 +229,21 @@ def rm_clean_many(npy_files, freq_file, mask_file=None, outdir='.',
         else:
             xx = np.arange(len(freqs))
         dat_file = f"{bdir}/{basenm}.txt"
-        darr_to_txt(dat_file, darr[xx], freqs[xx])
+
+        # Get the model (if desired)
+        if use_model:
+            S0, alpha = get_model(tab, rr[bnum])
+            freq0 = np.mean(freqs)
+            model = (S0, alpha, freq0)
+        else:
+            model = None
+
+        print(model)
+         
+        darr_to_txt(dat_file, darr[xx], freqs[xx], model=model)
 
         # run rm synthesis
-        ret1 = run_rmsynth1d(dat_file, phimax=phimax)
+        ret1 = run_rmsynth1d(dat_file, phimax=phimax, use_I=True)
         
         # run rm clean
         ret2 = run_rmclean1d(dat_file, niter, threshold)
@@ -380,8 +419,11 @@ def make_catalog(bdir, outfile):
     olines = []
     for ii, bdir in enumerate(blist):
         jfile = f"{bdir}/{bnames[ii]}_RMclean.json"
-        ostr = json_to_cat(bnums[ii], jfile)
-        olines.append(ostr)
+        try:
+            ostr = json_to_cat(bnums[ii], jfile)
+            olines.append(ostr)
+        except:
+            print(f"{bnames[ii]} rm json file not found!")
 
     # Write catalog 
     with open(outfile, "w") as fout:
@@ -398,94 +440,6 @@ def make_catalog(bdir, outfile):
         for oline in olines:
             fout.write(oline)
     return
-
-
-def plot_rms(cat_fits, rm_txt, cc0, rm0=0, vmin=None, vmax=None):
-    """
-    Make a plot using coords from cat_fits and 
-    rm values from rm_txt centered on cc0
-    """
-    tab = Table.read(cat_fits)
-    cc = SkyCoord(tab["RA"], tab["DEC"])
-    rdat = np.loadtxt(rm_txt)
-    bnums = rdat[:, 0].astype('int')
-    rms = rdat[:, 1]
-    pflux = rdat[:, 3]
-
-    dra = (cc.ra - cc0.ra) * np.cos(cc0.dec)
-    ddec = (cc.dec - cc0.dec)
-
-    dx = dra.arcmin
-    dy = ddec.arcmin
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-
-    ax.set_aspect('equal')
-    #ax.plot(dx, dy, marker='o', ls='')
-
-    print(np.mean(rms))
-    cax = ax.scatter(dx, dy, marker='o', c=rms-rm0, cmap='coolwarm', vmin=vmin, vmax=vmax)
-    cbar = plt.colorbar(cax, shrink=0.95, extend='both')
-    cbar.ax.set_ylabel('${\\rm RM}~({\\rm rad~m}^{-2})$', fontsize=12)
-
-    xlim = ax.get_xlim()
-    ax.set_xlim( xlim[1], xlim[0])
-    
-    ax.set_xlabel("RA Offset (arcmin)", fontsize=14)
-    ax.set_ylabel("DEC Offset (arcmin)", fontsize=14)
-
-    ax.plot(0, 0, marker='x', c='r')
-
-    plt.show()
-    return
-    
-
-
-def plot_rm_diffs(cat_fits, rm_txt, rm_txt2, cc0, vmin=None, vmax=None):
-    """
-    Make a plot using coords from cat_fits and 
-    rm values from rm_txt centered on cc0
-    """
-    tab = Table.read(cat_fits)
-    cc = SkyCoord(tab["RA"], tab["DEC"])
-    rdat = np.loadtxt(rm_txt)
-    bnums = rdat[:, 0].astype('int')
-    rms = rdat[:, 1]
-    pflux = rdat[:, 3]
-    
-    rdat2 = np.loadtxt(rm_txt2)
-    rms2 = rdat2[:, 1]
-    pflux2 = rdat2[:, 3]
-
-    dra = (cc.ra - cc0.ra) * np.cos(cc0.dec)
-    ddec = (cc.dec - cc0.dec)
-
-    dx = dra.arcmin
-    dy = ddec.arcmin
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-
-    ax.set_aspect('equal')
-    #ax.plot(dx, dy, marker='o', ls='')
-
-    print(np.mean(rms))
-    cax = ax.scatter(dx, dy, marker='o', 
-                     c=rms-rms2, cmap='coolwarm', vmin=vmin, vmax=vmax, 
-                     s=1 * (pflux2/pflux))
-    cbar = plt.colorbar(cax, shrink=0.95, extend='both')
-
-    xlim = ax.get_xlim()
-    ax.set_xlim( xlim[1], xlim[0])
-
-    ax.plot(0, 0, marker='x', c='r')
-
-    plt.show()
-    return
-    
-
-    
 
     
 
