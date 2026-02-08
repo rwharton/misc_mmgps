@@ -35,7 +35,6 @@ def convert_to_gal(infile, outfile):
 
     return 
 
-
 """
 hdulist1 = fits.open('Lband.fits')
 hdu1 = hdulist1[0]

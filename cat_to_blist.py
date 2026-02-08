@@ -402,6 +402,43 @@ def sw_to_reg(swfile, reg_file, radius=20,
     return
 
 
+def targets_to_reg(swfile, reg_file, color='white'):
+    hdr = "" +\
+          "# Region file format: DS9 version 4.0\n" +\
+          f"global color={color} font=\"helvetica 10 normal\" select=1 "+\
+          "highlite=1 edit=1 move=1 delete=1 include=1 fixed=0 source\n"+\
+          "fk5\n"
+
+    reg_str_list = []
+
+    with open(swfile, 'r') as fin:
+        for line in fin:
+            if line[:4] == "name":
+                continue
+            line = line.strip("\",\n")
+            cols = line.split(',')
+            print(line)
+            if len(cols) != 10:
+                continue
+            name = cols[0]
+            ra   = cols[1]
+            dec  = cols[2]
+
+            rx  = float(cols[3]) * 3600
+            ry  = float(cols[4]) * 3600
+            pa  = float(cols[5])
+
+            rstr = f"ellipse({ra}, {dec}, {rx:.2f}\", {ry:.2f}\", {pa:.1f}) #text={{{name}}}\n"
+            reg_str_list.append(rstr)
+            
+
+    with open(reg_file, 'w') as fout:
+        fout.write(hdr)
+        for rr in reg_str_list:
+            fout.write(rr)
+    return
+
+
 def get_spec(tab, idx, nchan=8):
     """
     go to row idx of table tab and extract 

@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt 
+import matplotlib
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
@@ -8,6 +9,25 @@ import os
 import glob
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 import json
+
+def blist_to_ccs(blist_file):
+    """
+    convert beam file to ccs
+    """
+    ras = []
+    decs = []
+    blist = np.load(blist_file)
+    for ii, col in enumerate(blist):
+        ra_str = col[1]
+        dec_str = col[2]
+        dec_str = ':'.join(dec_str.split('.', 2))
+        ras.append(ra_str)
+        decs.append(dec_str)
+
+    ccs = SkyCoord(ras, decs, unit=(u.hourangle, u.deg))
+
+    return ccs
+
 
 def running_median(dd, nwin=30):
     """
@@ -400,24 +420,55 @@ def make_catalog(bdir, outfile):
     return
 
 
-def plot_rms(cat_fits, rm_txt, cc0, rm0=0, vmin=None, vmax=None):
+def plot_rms(infile, rm_txt, cc0, rm0=0, vmin=None, vmax=None, 
+             cattype='blist', snr_min=-1, frame='fk5', offset=True):
     """
     Make a plot using coords from cat_fits and 
     rm values from rm_txt centered on cc0
     """
-    tab = Table.read(cat_fits)
-    cc = SkyCoord(tab["RA"], tab["DEC"])
+    if cattype == 'blist':
+        cc = blist_to_ccs(infile)
+    else:
+        tab = Table.read(infile)
+        cc = SkyCoord(tab["RA"], tab["DEC"])
+
     rdat = np.loadtxt(rm_txt)
     bnums = rdat[:, 0].astype('int')
     rms = rdat[:, 1]
     pflux = rdat[:, 3]
+    snrs = rdat[:, 5]
+    xx = np.where( snrs > snr_min )[0]
 
-    dra = (cc.ra - cc0.ra) * np.cos(cc0.dec)
-    ddec = (cc.dec - cc0.dec)
+    if offset:
+        if frame == 'fk5':
+            dra = (cc.fk5.ra - cc0.fk5.ra) * np.cos(cc0.fk5.dec)
+            ddec = (cc.fk5.dec - cc0.fk5.dec)
 
-    dx = dra.arcmin
-    dy = ddec.arcmin
+            dx = dra.arcmin
+            dy = ddec.arcmin
 
+        else:
+            dlon = (cc.galactic.l - cc0.galactic.l) * np.cos(cc0.galactic.b)
+            dlat = (cc.galactic.b - cc0.galactic.b)
+        
+            dx = dlon.arcmin
+            dy = dlat.arcmin
+
+    else:
+        if frame == 'fk5':
+            dx = cc.fk5.ra
+            dy = cc.fk5.dec
+
+        else:
+            dx = cc.galactic.l.deg
+            dy = cc.galactic.b.deg
+
+            #yy = np.where( dx > 180 )[0]
+            #print(yy)
+            #if len(yy):
+            #    dx[yy] = dx[yy] - 360 
+            #    print(dx)
+        
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
@@ -425,21 +476,91 @@ def plot_rms(cat_fits, rm_txt, cc0, rm0=0, vmin=None, vmax=None):
     #ax.plot(dx, dy, marker='o', ls='')
 
     print(np.mean(rms))
-    cax = ax.scatter(dx, dy, marker='o', c=rms-rm0, cmap='coolwarm', vmin=vmin, vmax=vmax)
+    cax = ax.scatter(dx[xx], dy[xx], marker='o', c=rms[xx]-rm0, cmap='coolwarm', 
+                     s=3 * (snrs[xx]), edgecolor='k', lw=0.5,
+                     vmin=vmin, vmax=vmax)
     cbar = plt.colorbar(cax, shrink=0.95, extend='both')
     cbar.ax.set_ylabel('${\\rm RM}~({\\rm rad~m}^{-2})$', fontsize=12)
 
     xlim = ax.get_xlim()
     ax.set_xlim( xlim[1], xlim[0])
-    
-    ax.set_xlabel("RA Offset (arcmin)", fontsize=14)
-    ax.set_ylabel("DEC Offset (arcmin)", fontsize=14)
+   
+    if frame == 'fk5': 
+        if offset:
+            ax.set_xlabel("RA Offset (arcmin)", fontsize=14)
+            ax.set_ylabel("DEC Offset (arcmin)", fontsize=14)
+        else:
+            ax.set_xlabel("RA (deg)", fontsize=14)
+            ax.set_ylabel("DEC (deg)", fontsize=14)
+    else:
+        if offset:
+            ax.set_xlabel("Gal Lon Offset (arcmin)", fontsize=14)
+            ax.set_ylabel("Gal Lat Offset (arcmin)", fontsize=14)
+        else:
+            ax.set_xlabel("Gal Lon (deg)", fontsize=14)
+            ax.set_ylabel("Gal Lat (deg)", fontsize=14)
 
-    ax.plot(0, 0, marker='x', c='r')
+    #ax.plot(0, 0, marker='x', c='r')
 
     plt.show()
     return
     
+
+
+def plot_frac_pol(infile, rm_txt, cc0, vmin=None, vmax=None, 
+                  snr_min=-1, frame='fk5'):
+    """
+    Make a plot using coords from cat_fits and 
+    rm values from rm_txt centered on cc0
+    """
+    tab = Table.read(infile)
+    cc = SkyCoord(tab["RA"], tab["DEC"])
+    fluxes = tab['Total_flux'] * 1e3
+
+    rdat = np.loadtxt(rm_txt)
+    bnums = rdat[:, 0].astype('int')
+    rms = rdat[:, 1]
+    pflux = rdat[:, 3]
+    snrs = rdat[:, 5]
+    pfrac = pflux / fluxes
+    xx = np.where( snrs > snr_min )[0]
+
+    if frame == 'fk5':
+        dx = cc.fk5.ra.deg
+        dy = cc.fk5.dec.deg
+
+    else:
+        dx = cc.galactic.l.deg
+        dy = cc.galactic.b.deg
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+
+    ax.set_aspect('equal')
+    #ax.plot(dx, dy, marker='o', ls='')
+
+    cax = ax.scatter(dx[xx], dy[xx], marker='o', c=pfrac[xx], cmap='inferno', 
+                     s=3 * (snrs[xx]), edgecolor='k', lw=0.5,  
+                     norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax))
+    cbar = plt.colorbar(cax, shrink=0.95)
+    cbar.ax.set_ylabel('Lin Pol Frac', fontsize=12)
+
+    xlim = ax.get_xlim()
+    ax.set_xlim( xlim[1], xlim[0])
+   
+    if frame == 'fk5': 
+       ax.set_xlabel("RA (deg)", fontsize=14)
+       ax.set_ylabel("DEC (deg)", fontsize=14)
+    else:
+       ax.set_xlabel("Gal Lon (deg)", fontsize=14)
+       ax.set_ylabel("Gal Lat (deg)", fontsize=14)
+
+    #ax.plot(0, 0, marker='x', c='r')
+    plt.show()
+    return
+    
+
+
 
 
 def plot_rm_diffs(cat_fits, rm_txt, rm_txt2, cc0, vmin=None, vmax=None):
@@ -479,7 +600,7 @@ def plot_rm_diffs(cat_fits, rm_txt, rm_txt2, cc0, vmin=None, vmax=None):
     xlim = ax.get_xlim()
     ax.set_xlim( xlim[1], xlim[0])
 
-    ax.plot(0, 0, marker='x', c='r')
+    #ax.plot(0, 0, marker='x', c='r')
 
     plt.show()
     return
@@ -500,4 +621,9 @@ def plot_rm_diffs(cat_fits, rm_txt, rm_txt2, cc0, vmin=None, vmax=None):
 #S1224
 #cc0 = (212.872125, -62.034)
 
+#S3021
+#cc0 = SkyCoord(-94.4631, -29.4174, unit=u.deg)
+
+# S3007
+cc0 = SkyCoord(-93.816, -29.9337, unit=u.deg)
 
